@@ -494,9 +494,7 @@ th{background:#eaf3f6;color:var(--navy)}
       </div>
 
       <form id="devEditForm" class="hidden">
-        <label>Profile Photo Link (URL)</label>
-        <input type="url" id="devPhotoUrlInput" placeholder="https://example.com/photo.jpg" oninput="previewDevPhotoUrl(event)">
-        <label>Or Select Local Photo File (Compressed)</label>
+        <label>Select Local Photo File (Compressed Automatically)</label>
         <input type="file" id="devPhotoInput" accept="image/*" onchange="previewDevPhoto(event)">
         <label>Developer / Admin Name</label>
         <input type="text" id="devEditName" required>
@@ -629,7 +627,7 @@ th{background:#eaf3f6;color:var(--navy)}
     <input type="text" id="eProblem" placeholder="e.g. Drive Motor Error">
     <label>Solution Details (বাংলায় লিখুন বা এডিট করুন)</label>
     <textarea id="eSolution" placeholder="সমাধানের বিস্তারিত বাংলায় লিখুন..."></textarea>
-    <label>Reference Image (Optional)</label>
+    <label>Reference Image (Optional, Compressed)</label>
     <input type="file" id="eImageInput" accept="image/*" onchange="handleErrorImage(event)">
     <input type="hidden" id="eImageData">
     <div class="actions">
@@ -819,10 +817,10 @@ const INITIAL_ERRORS = [
 
 const DEFAULT_ADMIN = {
   name: 'MD FERDOUS AHMMED TAMIM',
-  mobile: '01700000000',
+  mobile: '01897599613',
   email: 'mdferdousahmmedt@gmail.com',
   userId: 'admin',
-  photo: '', // এখানে আপনার সরাসরি ইমেজ লিংক (URL) বসাতে পারেন
+  photo: '',
   isOnline: false,
   lastActive: null
 };
@@ -858,6 +856,13 @@ let appState = {
 
 const $ = id => document.getElementById(id);
 
+function isUserTypingInInput() {
+  const active = document.activeElement;
+  if (!active) return false;
+  const tag = active.tagName.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select';
+}
+
 function showToast(msg, type = 'info') {
   const el = $('toastBanner');
   const txt = $('toastMessage');
@@ -886,11 +891,6 @@ function normalizePhone(phone) {
   let clean = (phone || '').replace(/[\s\-+]/g, '');
   if (clean.startsWith('8801') && clean.length === 13) clean = '0' + clean.slice(3);
   return clean;
-}
-
-function phoneToSyntheticEmail(phone) {
-  const clean = normalizePhone(phone);
-  return `user_${clean}@machinecare.local`;
 }
 
 function isPrimaryAdmin(email, mobile) {
@@ -999,6 +999,17 @@ function applyCloudSnapshot(val) {
   saveLocalCache(buildCloudPayload());
 }
 
+function renderActiveSectionOnly() {
+  if (!appState.currentUser) return;
+  if (appState.activeTab === 'errors') renderErrors();
+  if (appState.activeTab === 'machines') renderMachines();
+  if (appState.activeTab === 'chat') { renderContactSidebar(); renderChat(); }
+  if (appState.activeTab === 'analytics') renderAnalytics();
+  if (appState.activeTab === 'users') renderUserTable();
+  if (appState.activeTab === 'custom') renderCustomSection();
+  if (appState.activeTab === 'profile') renderDevProfile();
+}
+
 function renderAppIconDisplay() {
   const wrap = $('appIconDisplay');
   if (!wrap) return;
@@ -1017,7 +1028,7 @@ function renderAppIconDisplay() {
   }
 }
 
-async function compressImageToDataUrl(file, maxDimension = 360, quality = 0.65) {
+async function compressImageToDataUrl(file, maxDimension = 320, quality = 0.6) {
   if (!file || !file.type.startsWith('image/')) return '';
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -1066,11 +1077,17 @@ async function handleAppIconMediaUpload(event) {
     return;
   }
 
+  if (isVideo && file.size > 1.2 * 1024 * 1024) {
+    showToast('ভিডিও সাইজ ১.২ MB এর কম রাখুন, নাহলে ডেটাবেজে সিঙ্ক হতে সমস্যা হতে পারে।', 'error');
+    event.target.value = '';
+    return;
+  }
+
   setSyncBadge('⏳ Saving Icon...', '#d97706');
   try {
     let mediaUrl = '';
     if (isImage) {
-      mediaUrl = await compressImageToDataUrl(file, 200, 0.65);
+      mediaUrl = await compressImageToDataUrl(file, 180, 0.6);
     } else {
       mediaUrl = await new Promise((resolve) => {
         const reader = new FileReader();
@@ -1132,10 +1149,10 @@ function listenRealtimeDatabase() {
           return;
         }
       }
-      updateUI();
-      if (appState.activeTab === 'chat') { renderContactSidebar(); renderChat(); }
-      if (appState.activeTab === 'analytics') renderAnalytics();
-      if (appState.activeTab === 'users') renderUserTable();
+      populateCategoryDropdown();
+      if (!isUserTypingInInput()) {
+        renderActiveSectionOnly();
+      }
     }
   }, (err) => {
     console.error('Realtime listener error:', err);
@@ -1222,7 +1239,7 @@ function init() {
   setInterval(() => {
     if (appState.currentUser) {
       markUserHeartbeat(appState.currentUser, true);
-      if (appState.activeTab === 'analytics') renderAnalytics();
+      if (appState.activeTab === 'analytics' && !isUserTypingInInput()) renderAnalytics();
     }
   }, 60000);
 }
@@ -1289,6 +1306,10 @@ function setupEventListeners() {
         (u.email && u.email.toLowerCase() === resolvedEmail.toLowerCase()) ||
         (u.mobile && normalizePhone(u.mobile) === normalizePhone(rawIdentifier))
       );
+
+      if (!rawIdentifier.includes('@') && !isPrimaryAdmin('', rawIdentifier) && !localUserMatch) {
+        return showToast('এই মোবাইল নম্বরটি দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি। ইমেইল দিয়ে লগইন করুন বা রেজিস্টার করুন।', 'error');
+      }
 
       if (appState.loginTab === 'admin') {
         const isAllowedAdmin = isPrimaryAdmin(resolvedEmail, rawIdentifier) || (localUserMatch && localUserMatch.role === 'admin');
@@ -1389,7 +1410,6 @@ function setupEventListeners() {
       const name = $('devEditName').value.trim();
       const mobile = $('devEditMobile').value.trim();
       const email = $('devEditEmail').value.trim();
-      const photoUrlInput = $('devPhotoUrlInput') ? $('devPhotoUrlInput').value.trim() : '';
       const currentPass = $('devCurrentPass').value;
       const newPass = $('devNewPass').value;
       const btn = $('saveDevBtn');
@@ -1419,9 +1439,7 @@ function setupEventListeners() {
         appState.adminProfile.name = name;
         appState.adminProfile.mobile = mobile;
         appState.adminProfile.email = email;
-        if (photoUrlInput) {
-          appState.adminProfile.photo = photoUrlInput;
-        } else if ($('devViewPhoto') && $('devViewPhoto').src && !$('devViewPhoto').src.includes('placehold.co')) {
+        if ($('devViewPhoto') && $('devViewPhoto').src && !$('devViewPhoto').src.includes('placehold.co')) {
           appState.adminProfile.photo = $('devViewPhoto').src;
         }
         if (appState.currentUser) {
@@ -1508,7 +1526,7 @@ function resolveLoginEmail(identifier) {
   if (cleanPhone === normalizePhone(appState.adminProfile.mobile)) return appState.adminProfile.email;
   const foundUser = appState.users.find(u => normalizePhone(u.mobile) === cleanPhone);
   if (foundUser && foundUser.email) return foundUser.email;
-  return phoneToSyntheticEmail(cleanPhone);
+  return trimmed;
 }
 
 function formatFirebaseError(err) {
@@ -1632,13 +1650,7 @@ function setTab(tab, customId = null) {
   const map = { errors:'errorSection', machines:'machineSection', chat:'chatSection', analytics:'analyticsSection', users:'userSection', custom:'customSection', profile:'profileSection' };
   if (map[tab] && $(map[tab])) $(map[tab]).classList.remove('hidden');
 
-  if (tab === 'errors') renderErrors();
-  if (tab === 'machines') renderMachines();
-  if (tab === 'chat') { renderContactSidebar(); renderChat(); }
-  if (tab === 'analytics') renderAnalytics();
-  if (tab === 'users') renderUserTable();
-  if (tab === 'custom') renderCustomSection();
-  if (tab === 'profile') renderDevProfile();
+  renderActiveSectionOnly();
 }
 
 function openAppNameModal() {
@@ -2157,10 +2169,10 @@ async function handleErrorImage(event) {
   if (!file) return;
   setSyncBadge('⏳ Processing Image...', '#d97706');
   try {
-    const compressedUrl = await compressImageToDataUrl(file, 360, 0.65);
+    const compressedUrl = await compressImageToDataUrl(file, 260, 0.55);
     if ($('eImageData')) $('eImageData').value = compressedUrl;
     setSyncBadge('✅ Cloud Synced', '#059669');
-    showToast('ছবি প্রস্তুত! Save Error Solution চাপুন।', 'success');
+    showToast('ছবি কম্প্রেস হয়ে প্রস্তুত! Save Error Solution চাপুন।', 'success');
   } catch (e) {
     setSyncBadge('✅ Cloud Synced', '#059669');
   }
@@ -2306,16 +2318,9 @@ function toggleDevEdit(showEdit) {
     if ($('devEditName')) $('devEditName').value = adm.name;
     if ($('devEditMobile')) $('devEditMobile').value = adm.mobile;
     if ($('devEditEmail')) $('devEditEmail').value = adm.email;
-    if ($('devPhotoUrlInput')) $('devPhotoUrlInput').value = (adm.photo && !adm.photo.startsWith('data:')) ? adm.photo : '';
+    if ($('devPhotoInput')) $('devPhotoInput').value = '';
     if ($('devCurrentPass')) $('devCurrentPass').value = '';
     if ($('devNewPass')) $('devNewPass').value = '';
-  }
-}
-
-function previewDevPhotoUrl(event) {
-  const url = event.target.value.trim();
-  if (url && $('devViewPhoto')) {
-    $('devViewPhoto').src = url;
   }
 }
 
@@ -2340,12 +2345,12 @@ async function previewDevPhoto(event) {
   if (!file) return;
   setSyncBadge('⏳ Saving Photo...', '#d97706');
   try {
-    const url = await compressImageToDataUrl(file, 200, 0.65);
+    const url = await compressImageToDataUrl(file, 180, 0.6);
     if (!url) throw new Error('Photo read failed');
     appState.adminProfile.photo = url;
     if ($('devViewPhoto')) $('devViewPhoto').src = url;
     await saveAll();
-    showToast('Developer photo সেভ ও সিঙ্ক হয়েছে!', 'success');
+    showToast('Developer photo কম্প্রেস হয়ে সেভ ও সিঙ্ক হয়েছে!', 'success');
   } catch (e) {
     setSyncBadge('✅ Cloud Synced', '#059669');
     showToast('Photo error: ' + (e.message || 'Try another photo.'), 'error');
@@ -2409,7 +2414,7 @@ Object.assign(window, {
   resetErrorFilters, renderMachines, clearAllChat, sendChatMessage, deleteChatMessage,
   selectChatRecipient, renderAnalytics, clearLoginLogs, openCustomItemModal, saveCustomItem,
   deleteCustomItem, renameCurrentCustomSection, deleteCurrentCustomSection, toggleDevEdit,
-  toggleUserSelfEdit, previewDevPhoto, previewDevPhotoUrl, closeModal, handleAiFileUpload,
+  toggleUserSelfEdit, previewDevPhoto, closeModal, handleAiFileUpload,
   runAiExtractAndTranslate, handleErrorImage, openUserEditModal, saveUserEdit, toggleBlockUser,
   deleteUser, addComment, openReplyModal, setTab, performLogout, handleAppIconMediaUpload,
   hideToast, enablePushNotifications
